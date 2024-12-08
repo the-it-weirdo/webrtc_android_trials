@@ -1,0 +1,43 @@
+
+
+
+<!DOCTYPE html>
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+
+    <meta charset="utf-8">
+    <title>Unreal Media Server WebRTC player</title>
+
+    <script src="webrtcadapter.js"></script>
+    <script src="unrealwebrtcplayer.js"></script>
+
+    <script type="text/javascript">
+
+        var webrtcPlayer = null;
+
+        function OnMetadata() {
+            var remoteVideo = document.getElementById("remoteVideo");
+            remoteVideo.width = Math.max(remoteVideo.videoWidth, 500);
+            remoteVideo.height = Math.max(remoteVideo.videoHeight, 300);
+        }
+
+    </script>
+
+</head>
+
+<body>
+
+<div id="container" align="center">
+
+    <video style="background-color:black" id="remoteVideo" width="1000" height="600" autoplay playsinline controls muted onloadedmetadata="OnMetadata()"></video>
+
+    <script type="text/javascript">
+        webrtcPlayer = new UnrealWebRTCPlayer("remoteVideo", "8fc99cbc-1206-45cb-864e-c354dbd003e2", "", "unrealstreaming.net", "444", true, true, "tcp");
+        webrtcPlayer.Play();
+    </script>
+
+</div>
+
+</body>
+</html>
