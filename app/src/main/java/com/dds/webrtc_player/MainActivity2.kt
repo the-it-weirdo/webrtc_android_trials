@@ -47,7 +47,7 @@ class MainActivity2 : AppCompatActivity() {
         webRTCPlayer = WebRTCPlayer(
             context = this,
             surfaceView = surfaceView,
-            wsUrl = "wss://unrealstreaming.net:444/webrtc_playnow/singleport/tcp/2a851cef-fbc0-45fa-b008-385d1da96383"
+            wsUrl = "wss://uhlsd01.securecomwireless.com:8443/webrtc_playnow/singleport/tcp/devcam"
         )
 
         webRTCPlayer.start()

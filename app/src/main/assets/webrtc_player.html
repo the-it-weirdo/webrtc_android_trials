@@ -9,7 +9,7 @@
     <meta charset="utf-8">
     <title>Unreal Media Server WebRTC player</title>
 
-    <script src="webrtcadapter.js"></script>
+<!--    <script src="webrtcadapter.js"></script>-->
     <script src="unrealwebrtcplayer.js"></script>
 
     <script type="text/javascript">
@@ -30,10 +30,13 @@
 
 <div id="container" align="center">
 
-    <video style="background-color:black" id="remoteVideo" width="1000" height="600" autoplay playsinline controls muted onloadedmetadata="OnMetadata()"></video>
+    <video style="background-color:black" id="remoteVideo" width="100" height="50" autoplay playsinline controls muted onloadedmetadata="OnMetadata()"></video>
 
     <script type="text/javascript">
-        webrtcPlayer = new UnrealWebRTCPlayer("remoteVideo", "8fc99cbc-1206-45cb-864e-c354dbd003e2", "", "unrealstreaming.net", "444", true, true, "tcp");
+<!--        wss://uhlsD01.securecomwireless.com:8443/webrtc_playnow/singleport/tcp/7ad14b5c-360a-4d8c-b597-cc438e464bc5-->
+<!--wss://uhlsD01.securecomwireless.com:8443/webrtc_playnow/singleport/tcp/3a4bff80-a98c-4255-8ccd-f65ad8bbb724-->
+<!--wss://uhlsD01.securecomwireless.com:8443/webrtc_playnow/singleport/tcp/c32ac9c2-052c-4b9e-99b8-c572ca78c66c-->
+        webrtcPlayer = new UnrealWebRTCPlayer("remoteVideo", "528aa9bf-63f3-4fc2-a2e9-cce7e506a4a1", "", "uhlsd01.securecomwireless.com", "8443", true, true, "tcp");
         webrtcPlayer.Play();
     </script>
 

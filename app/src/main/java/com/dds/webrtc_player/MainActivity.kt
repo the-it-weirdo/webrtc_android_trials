@@ -442,7 +442,7 @@ class MainActivity : AppCompatActivity() {
         if (sid.isNotEmpty()) {
             url += "/sid:$sid"
         }
-        return "wss://unrealstreaming.net:444/webrtc_playnow/singleport/tcp/0f7cb3d8-a9dd-4b85-b427-0c8d561d580b"
+        return "wss://uhlsD01.securecomwireless.com:8443/webrtc_playnow/singleport/tcp/20d48409-695c-4054-b05e-1243d274e3ef"
     }
 
     private fun showError(message: String) {

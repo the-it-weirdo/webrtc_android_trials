@@ -94,6 +94,7 @@ function UnrealWebRTCPlayer(videoID, alias, sid, ipAddress, port, useSecureWebso
 
         //Signal the SDP to the server
         var msgString = JSON.stringify(desc);
+        console.log(msgString);
         ws.send(msgString);
 
         pc.setLocalDescription(desc);
@@ -181,6 +182,7 @@ function UnrealWebRTCPlayer(videoID, alias, sid, ipAddress, port, useSecureWebso
 
                     //Temporary fix for androids until Google fixes https://bugs.chromium.org/p/chromium/issues/detail?id=1047994
                     if ((firstAttempt) && (response === "Error: Initialization of peer connection failed") && (navigator.userAgent.toLowerCase().indexOf("android") > -1)) {
+                    console.log(response)
                         firstAttempt = false;
                         latestStopTime = 0;
                         setTimeout(function () { that.Play(); }, 500);
@@ -193,6 +195,8 @@ function UnrealWebRTCPlayer(videoID, alias, sid, ipAddress, port, useSecureWebso
                     var serverEndpoint = JSON.parse(strArr[1]);
 
                     serverEndpoint.candidate = EnsureValidCandidate(serverEndpoint.candidate);
+
+                    console.log(serverEndpoint.candidate)
 
                     pc.setRemoteDescription(new RTCSessionDescription(serverSDP));
                     var candidate = new RTCIceCandidate({ sdpMLineIndex: serverEndpoint.sdpMLineIndex, candidate: serverEndpoint.candidate });

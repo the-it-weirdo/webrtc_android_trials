@@ -253,15 +253,26 @@ class WebRTCPlayer(
                 peerConnection?.setLocalDescription(this, modifiedSdp)
 
 
-                val sdpJson = "\"{\\\"sdp\\\":\\\"${finalSdp.replace("\r\n", "\\\\r\\\\n")}\\\",\\\"type\\\":\\\"${sdp.type.canonicalForm()}\\\"}\""
+//                val sdpJson = "\"{\\\"sdp\\\":\\\"${finalSdp.replace("\r\n", "\\\\r\\\\n")}\\\",\\\"type\\\":\\\"${sdp.type.canonicalForm()}\\\"}\""
+
+                val sdpJson = JSONObject().apply {
+                    put("sdp", modifiedSdp.description)
+                    put("type", modifiedSdp.type.canonicalForm())
+                }
 
                 Log.d("WebRTC", "Sending SDP: $sdpJson")
-                webSocket?.send(sdpJson)
+                webSocket?.send(sdpJson.toString())
             }
 
-            override fun onSetSuccess() {}
-            override fun onCreateFailure(error: String) {}
-            override fun onSetFailure(error: String) {}
+            override fun onSetSuccess() {
+                Log.d("WebRTC", "Offer desc Set success")
+            }
+            override fun onCreateFailure(error: String) {
+                Log.e("WebRTC", "Offer desc create failure $error")
+            }
+            override fun onSetFailure(error: String) {
+                Log.e("WebRTC", "Offer desc Set failure $error")
+            }
         }, constraints)
     }
 
