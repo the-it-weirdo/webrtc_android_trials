@@ -46,7 +46,7 @@ class MainActivity2 : AppCompatActivity() {
         val surfaceView = findViewById<SurfaceViewRenderer>(R.id.surface_view_renderer)
         webRTCPlayer = WebRTCPlayer(
             context = this,
-            url = "wss://uhlsd01.securecomwireless.com:8443/webrtc_playnow/singleport/tcp/devcam",
+            url = "wss://uhlsd01.securecomwireless.com:8443/webrtc_playnow/singleport/udp/devcam",
             videoSink = surfaceView
         )
 

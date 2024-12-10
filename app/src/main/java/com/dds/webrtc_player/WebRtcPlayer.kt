@@ -19,7 +19,7 @@ import org.webrtc.PeerConnectionFactory.InitializationOptions
 import java.util.concurrent.ConcurrentSkipListSet
 
 
-class WebRTCPlayer(val context: Context, val url:String, val videoSink: VideoSink): WebSocketListener() {
+class WebRTCPlayer(val context: Context, val url:String, val videoSink: SurfaceViewRenderer): WebSocketListener() {
 
     private fun sendSocketMessage(s:String) {
         webSocketClient.send(s)
@@ -70,6 +70,8 @@ class WebRTCPlayer(val context: Context, val url:String, val videoSink: VideoSin
 
     }
 
+    private val eglBase: EglBase = EglBase.create()
+
     init {
         // Initialize PeerConnectionFactory globals.
         val initializationOptions =
@@ -84,9 +86,11 @@ class WebRTCPlayer(val context: Context, val url:String, val videoSink: VideoSin
         // Create a new PeerConnectionFactory instance.
         val options = PeerConnectionFactory.Options()
         pcF = PeerConnectionFactory.builder()
-            .setVideoDecoderFactory(DefaultVideoDecoderFactory(EglBase.create().eglBaseContext))
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
             .setOptions(options)
             .createPeerConnectionFactory()
+
+        videoSink.init(eglBase.eglBaseContext, null)
 
         play()
     }
@@ -338,7 +342,7 @@ class WebRTCPlayer(val context: Context, val url:String, val videoSink: VideoSin
         }
 
         candLines[ipIndex] = ipAddress
-        candLines[ipIndex-2] = "tcp"
+        candLines[ipIndex-2] = "udp"
         return candLines.joinToString(" ")
     }
 
