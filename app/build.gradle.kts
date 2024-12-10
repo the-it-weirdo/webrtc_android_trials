@@ -61,5 +61,6 @@ dependencies {
 
     // Stream WebRTC wrapper (or any WebRTC library)
     implementation(libs.stream.webrtc.android)
+    implementation(libs.stream.webrtc.android.ktx)
 
 }

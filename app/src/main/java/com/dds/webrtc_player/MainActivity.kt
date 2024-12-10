@@ -43,7 +43,7 @@ class MainActivity : AppCompatActivity() {
         surfaceView.setMirror(false)
         surfaceView.setEnableHardwareScaler(true)
 
-        startActivity(Intent(this, WebViewRTC::class.java))
+        startActivity(Intent(this, MainActivity2::class.java))
 
 //        initializePeerConnectionFactory()
 

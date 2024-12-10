@@ -9,192 +9,423 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import org.webrtc.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import okio.ByteString
+import org.webrtc.PeerConnection.RTCConfiguration
+import org.webrtc.PeerConnectionFactory.InitializationOptions
+import java.util.concurrent.ConcurrentSkipListSet
 
-class WebRTCPlayer(
-    private val context: Context,
-    private val surfaceView: SurfaceViewRenderer,
-    private val wsUrl: String
-) {
-    private val eglBase = EglBase.create()
-    private lateinit var peerConnectionFactory: PeerConnectionFactory
-    private var peerConnection: PeerConnection? = null
-    private var webSocket: WebSocket? = null
 
-    private var state = -1  // Track connection state
-    private var videoCodec = ""  // Store codec info from server
+class WebRTCPlayer(val context: Context, val url:String, val videoSink: VideoSink): WebSocketListener() {
+
+    private fun sendSocketMessage(s:String) {
+        webSocketClient.send(s)
+    }
+
+    fun open() {
+        if (::webSocketClient.isInitialized)
+            webSocketClient.cancel()
+
+        webSocketClient = OkHttpClient.Builder().build().newWebSocket(
+            Request.Builder().url(url).build(), this)
+    }
+
+    private val TAG = "WssDataStreamCollector"
+
+    private lateinit var  webSocketClient: WebSocket
+
+    var pc: PeerConnection? = null;
+    var pcF: PeerConnectionFactory? = null
+    var state = -1;
+    var audioCodec = "";
+    var videoCodec = "H264";
+    var firstAttempt = true;
+    var connOK = false;
+    val iceCandidates = mutableListOf<IceCandidate>()
+
+    var firstResponse: String = ""
+
+    private val wssData = ConcurrentSkipListSet<ByteString>()
+
+    private val sdpObserver = object :SdpObserver {
+        override fun onCreateSuccess(p0: SessionDescription?) {
+            Log.d( TAG, "onCreateSuccess: ${p0?.type} ${p0?.description}")
+            onCreateOfferSuccess(p0)
+        }
+
+        override fun onSetSuccess() {
+            Log.d( TAG, "SdpObserver set success")
+        }
+
+        override fun onCreateFailure(p0: String?) {
+            Log.d( TAG, "SdpObserver create failure: $p0")
+        }
+
+        override fun onSetFailure(p0: String?) {
+            Log.d( TAG, "SdpObserver set failure: $p0")
+        }
+
+    }
 
     init {
-        initializePeerConnection()
-    }
+        // Initialize PeerConnectionFactory globals.
+        val initializationOptions =
+            InitializationOptions.builder(context)
+                .setEnableInternalTracer(true)
+                .setInjectableLogger({ message, severity, tag ->
+                    Log.d( "RTCPeerConnection", "[$severity] $tag: $message")
+                }, Logging.Severity.LS_VERBOSE)
+                .createInitializationOptions()
+        PeerConnectionFactory.initialize(initializationOptions)
 
-    private fun initializePeerConnection() {
-        // Initialize WebRTC components
-        val options = PeerConnectionFactory.InitializationOptions.builder(context)
-            .setEnableInternalTracer(true)
-            .setInjectableLogger({ message, severity, tag ->
-                Log.d("WebRTC", "[$severity] $tag: $message")
-            }, Logging.Severity.LS_VERBOSE)
-            .createInitializationOptions()
-        PeerConnectionFactory.initialize(options)
-
-        // Create peer connection factory
-        peerConnectionFactory = PeerConnectionFactory.builder()
-            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
-            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
+        // Create a new PeerConnectionFactory instance.
+        val options = PeerConnectionFactory.Options()
+        pcF = PeerConnectionFactory.builder()
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(EglBase.create().eglBaseContext))
+            .setOptions(options)
             .createPeerConnectionFactory()
 
-        // Initialize surface view
-        surfaceView.init(eglBase.eglBaseContext, null)
-        surfaceView.setEnableHardwareScaler(true)
+        play()
     }
 
-    fun start() {
-        // Create websocket connection
-        val client = OkHttpClient()
-        val request = Request.Builder()
-            .url(wsUrl)
-            .build()
+    fun play() {
+        state = 0
+        connOK = false
+        open()
+    }
 
-        val listener = object : WebSocketListener() {
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                Log.d("WebRTCPlayer-onMessage", text)
-                handleSocketMessage(text)
+    override fun onMessage(webSocket: WebSocket, text: String) {
+        super.onMessage(webSocket, text)
+        Log.d( "DDS-WssDataStreamCollector:onMessageString", "Message: $text,  ${webSocket.queueSize()} ")
+        firstResponse = text
+        if (text != "Alias of the live source is not recognized by Media Server.")
+            openWebRtc(text)
+        else
+            Log.e(TAG, "message received: $text")
+    }
+
+    private fun openWebRtc(text: String) {
+        Log.d( TAG, "openWebRtc: $text")
+        val strAttr = text.split("|-|-|")
+
+        connOK = true
+
+        if (state == 0) {
+            state = 1
+
+            if (strAttr.size == 1) {
+                terminate()
+                Log.e( TAG, text)
+            } else {
+                videoCodec = strAttr[0]
+                audioCodec = strAttr[1]
+
+
+                val rtcConfig = RTCConfiguration(
+                    arrayListOf(),
+                ).apply {
+                    // it's very important to use new unified sdp semantics PLAN_B is deprecated
+                    sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+                }
+
+                pc = pcF?.createPeerConnection(rtcConfig, getPeerConnectionListener())
+
+                val offerOptions = createOfferOptions(videoCodec, audioCodec)
+
+                pc?.createOffer(sdpObserver, offerOptions)
             }
+        } else {
+            Log.d( TAG, "In else block of openwebrtc $text")
+            if (text == "H264|-|-|") {
+                state = 0
+                openWebRtc(text)
+            }
+            if (strAttr.size == 1) {
+                terminate()
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e("WebRTCPlayer", "WebSocket error: ${t.message}")
+                if (firstAttempt && text == "Error: Initialization of peer connection failed") {
+                    firstAttempt = false
+                    CoroutineScope(Dispatchers.Main).launch {
+                        delay(500)
+//                        openWebRtc("H264|-|-|")
+//                        retry()
+                        open()
+                    }
+                } else {
+                    Log.e( TAG, "Message received was: $text")
+                }
+            } else {
+                var serverSDP = JSONObject(strAttr[0])
+                var serverEndPoint = JSONObject(strAttr[1])
+
+                Log.d( TAG, "Server SDP: $serverSDP , \nserverEndpoint: $serverEndPoint\n${serverEndPoint.getInt("sdpMLineIndex")}")
+
+                serverEndPoint.put("candidate", ensureValidCandidate(serverEndPoint.getString("candidate")))
+
+                Log.d( TAG, "Validated candidate: $serverEndPoint")
+                val candidate = IceCandidate(serverEndPoint.getString("sdpMid"), serverEndPoint.getInt("sdpMLineIndex"), serverEndPoint.getString("candidate"))
+                Log.d( TAG, "ICE candidate: $candidate")
+                pc?.addIceCandidate(candidate)
+                val remoteDescription = SessionDescription(SessionDescription.Type.valueOf(serverSDP.getString("type").toUpperCase()), serverSDP.getString("sdp"))
+                Log.d( TAG, "Remote description: $remoteDescription")
+                pc?.setRemoteDescription(object :SdpObserver {
+                    override fun onCreateSuccess(p0: SessionDescription?) {
+                        Log.d( TAG, "remote sdp create success $p0")
+                    }
+
+                    override fun onSetSuccess() {
+                        Log.d( TAG, "remote sdp set success")
+                    }
+
+                    override fun onCreateFailure(p0: String?) {
+                        Log.d( TAG, "remote sdp create failure $p0")
+                    }
+
+                    override fun onSetFailure(p0: String?) {
+                        Log.d( TAG, "remote sdp set failure $p0")
+                    }
+
+                }, remoteDescription)
             }
         }
 
-        webSocket = client.newWebSocket(request, listener)
+
     }
 
-    private fun handleSocketMessage(message: String) {
-        val parts = message.split("|-|-|")
+    private fun getPeerConnectionListener(): PeerConnection.Observer {
+        return object :PeerConnection.Observer {
 
-        when (state) {
-            -1 -> {
-                // Initial message with codec info
-                if (parts[0] == "H264") {
-                    videoCodec = "H264"
-                    state = 0
-                    createPeerConnection()
-                    createAndSendOffer()
+            override fun onTrack(transceiver: RtpTransceiver?) {
+                super.onTrack(transceiver)
+                Log.d( TAG, "onTrack ${transceiver?.mediaType}, $transceiver")
+
+            }
+
+            override fun onSignalingChange(p0: PeerConnection.SignalingState?) {
+                Log.d( TAG, "onSignalingChange: $p0")
+            }
+
+            override fun onIceConnectionChange(p0: PeerConnection.IceConnectionState?) {
+                Log.d( TAG, "onIceConnectionChange: $p0")
+            }
+
+            override fun onIceConnectionReceivingChange(p0: Boolean) {
+                Log.d( TAG, "onIceConnectionReceivingChange: $p0")
+            }
+
+            override fun onIceGatheringChange(p0: PeerConnection.IceGatheringState?) {
+                Log.d( TAG, "onIceGatheringChange: $p0")
+                if (p0 == PeerConnection.IceGatheringState.COMPLETE) {
+                    sendIceCandidates()
                 }
             }
-            0 -> {
-                // Handle server response with SDP and candidate
-                if (parts.size == 2) {
-                    val serverSdp = JSONObject(parts[0])
-                    val serverCandidate = JSONObject(parts[1])
-                    handleServerResponse(serverSdp, serverCandidate)
-                }
-            }
-        }
-    }
 
-    private fun createPeerConnection() {
-        val rtcConfig = PeerConnection.RTCConfiguration(emptyList()).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-        }
-
-        val observer = object : PeerConnection.Observer {
-            override fun onAddStream(stream: MediaStream?) {
-                stream?.videoTracks?.firstOrNull()?.addSink(surfaceView)
+            override fun onIceCandidate(p0: IceCandidate?) {
+                Log.d( TAG, "onIceCandidate: $p0 , ${p0?.serverUrl}")
+                p0?.let {iceCandidates.add(IceCandidate(it.sdpMid, it.sdpMLineIndex, ensureValidCandidate(it.sdp)))}
+//                p0?.let { candidate ->
+//                    val candidateObj = JSONObject().apply {
+//                        put("type", "candidate")
+//                        put("sdpMid", candidate.sdpMid)
+//                        put("sdpMLineIndex", candidate.sdpMLineIndex)
+//                        put("candidate", candidate.sdp)
+//                    }
+//                    sendSocketMessage(candidateObj.toString())
+//                }
+//                val candidate = ensureValidCandidate(p0?.sdp?:"")
+////                pc?.addIceCandidate(IceCandidate(p0?.sdpMid, p0?.sdpMLineIndex ?: 0, candidate))
+////                pc?.addIceCandidate(IceCandidate(p0?.sdpMid, p0?.sdpMLineIndex?:0, candidate))
+////                pc?.addIceCandidate(p0)
+//                val obj = JSONObject().apply {
+//                    put("candidate", p0?.sdp)
+//                    put("sdpMid", p0?.sdpMid)
+//                    put("sdpMLineIndex", p0?.sdpMLineIndex)
+//                    put("type", "candidate")
+//                }
+//                sendSocketMessage(obj.toString())
+//                sendSocketMessage("3 ${p0?.sdpMid}:${p0?.sdpMLineIndex}:${candidate}")
+//                pc?.setRemoteDescription(sdpObserver, SessionDescription(SessionDescription.Type.valueOf(serverSDP.getString("type").toUpperCase()), serverSDP.getString("sdp")))
             }
-            // Implement other required methods...
-            override fun onIceCandidate(candidate: IceCandidate?) {}
+
             override fun onIceCandidatesRemoved(p0: Array<out IceCandidate>?) {
-
+                Log.d( TAG, "onIceCandidatesRemoved: $p0")
             }
 
-            override fun onSignalingChange(state: PeerConnection.SignalingState?) {}
-            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
-                when(state) {
-                    PeerConnection.IceConnectionState.CONNECTED -> Log.d("WebRTCPlayer", "PeerConnection connected")
-                    PeerConnection.IceConnectionState.NEW -> Log.d("WebRTCPlayer", "PeerConnection New")
-                    PeerConnection.IceConnectionState.CLOSED -> Log.d("WebRTCPlayer", "PeerConnection Closed")
-                    PeerConnection.IceConnectionState.COMPLETED -> Log.d("WebRTCPlayer", "PeerConnection Completed")
-                    PeerConnection.IceConnectionState.CHECKING -> Log.d("WebRTCPlayer", "PeerConnection Checking")
-                    PeerConnection.IceConnectionState.DISCONNECTED -> Log.d("WebRTCPlayer", "PeerConnection disconnected")
-                    PeerConnection.IceConnectionState.FAILED -> Log.d("WebRTCPlayer", "PeerConnection failed")
-                    null -> Log.d("WebRTCPlayer", "PeerConnection null")
+            override fun onAddStream(p0: MediaStream?) {
+                Log.d( TAG, "onAddStream: $p0")
+                p0?.videoTracks?.firstOrNull()?.addSink(videoSink)
+            }
+
+            override fun onRemoveStream(p0: MediaStream?) {
+                Log.d( TAG, "onRemoveStream: $p0")
+            }
+
+            override fun onDataChannel(p0: DataChannel?) {
+                Log.d( TAG, "onDataChannel: $p0")
+            }
+
+            override fun onRenegotiationNeeded() {
+                Log.d( TAG, "onRenegotiationNeeded")
+            }
+
+            override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {
+                Log.d( TAG, "onAddTrack: $p0 , $p1")
+            }
+
+        }
+    }
+
+    private fun createOfferOptions(videoCodec: String, audioCodec: String): MediaConstraints {
+        Log.d( TAG, "createOfferOptions: $videoCodec, $audioCodec")
+        return when {
+            videoCodec.isNotEmpty() && audioCodec.isNotEmpty() -> {
+                MediaConstraints().apply {
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
                 }
             }
-            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
-            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {}
-            override fun onRemoveStream(stream: MediaStream?) {}
-            override fun onDataChannel(channel: DataChannel?) {}
-            override fun onRenegotiationNeeded() {}
-        }
-
-        peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, observer)
-    }
-
-    fun extractPayloadType(sdpLine: String, pattern: Regex): String? {
-        val result = pattern.find(sdpLine)
-        return result?.groupValues?.getOrNull(1)
-    }
-
-    fun ensureSupportedProfile(codec: String, sdpLines: List<String>, mLineIndex: Int, codecPayload: String): Boolean {
-        if (codec != "H264") return true
-
-        // Server can send any profile/level H264, but SDP has to specify supported one
-        for (i in mLineIndex until sdpLines.size) {
-            if (sdpLines[i].startsWith("a=fmtp:$codecPayload") && sdpLines[i].contains("profile-level-id")) {
-                return true
+            videoCodec.isNotEmpty() -> {
+                MediaConstraints().apply {
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
+                }
             }
+            audioCodec.isNotEmpty() -> {
+                MediaConstraints().apply {
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+                }
+            }
+            else -> throw IllegalArgumentException("Invalid codec configuration")
         }
-        return false
     }
 
-    fun setDefaultCodec(mLine: String, payload: String): String {
-        val elements = mLine.split(" ")
-        val newLine = mutableListOf<String>()
-        var index = 0
+    private fun validateIPAddress(ipAddr: String): Boolean {
+        val regex = """^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"""
+        return ipAddr.matches(Regex(regex))
+    }
 
-        for (element in elements) {
-            if (index == 3) {
-                newLine.add(payload)
+
+    private fun ensureValidCandidate(candidate: String): String {
+        Log.d( TAG, "Candidate validation: $candidate")
+        val ipAddress = "uhlsd01.securecomwireless.com"
+
+        if (candidate.contains(ipAddress) || ipAddress == "127.0.0.1") {
+            return candidate
+        }
+
+        val candLines = candidate.split(" ").toMutableList()
+        var ipIndex = 4;
+        for (i in 0..candLines.size) {
+            if (candLines[i] == "typ") {
+                ipIndex = i - 2
                 break
             }
-            if (element != payload) {
-                newLine.add(element)
-                index++
-            }
         }
 
-        return newLine.joinToString(" ")
+        candLines[ipIndex] = ipAddress
+        candLines[ipIndex-2] = "tcp"
+        return candLines.joinToString(" ")
     }
 
-    fun setCodec(sdp: String, type: String, codec: String, clockRate: Int): String {
-        Log.d("setCodec-sdp default sdp received:", sdp)
-        val sdpLines = sdp.split("\r\n").toMutableList()
-        var mLineIndex: Int? = null
+    private fun terminate() {
+        state = -1
 
-        // Find m= line index
-        for (i in sdpLines.indices) {
+        if (pc != null) {
+            pc?.close()
+            pc = null
+        }
+    }
+
+    private fun onCreateOfferSuccess(description: SessionDescription?) {
+        var desc = description?.description ?: ""
+        var lines = description?.description?.split("\r\n")?.joinToString("\n") ?: ""
+        Log.d( TAG, "onCreateOfferSuccess: $lines")
+//        var audioRate = 8000;
+//        if (audioCodec == "opus")
+//            audioRate = 48000
+//
+//        if (audioCodec.isNotEmpty()) {
+//            desc = setCodec(desc, "audio", audioCodec, audioRate.toString())
+//        }
+        if(videoCodec.isNotEmpty()) {
+            lines = setCodec(lines, "video", videoCodec, "90000")
+        }
+
+        lines = lines.replace("a=sendrecv", "a=recvonly")
+        lines = lines.replace("a=sendrecv", "a=recvonly")
+
+        lines = lines.replace("a=extmap-allow-mixed\\r\\n", "")
+        lines = lines.replace("a=extmap-allow-mixed", "")
+
+        lines = lines.replace("a=ice-options:trickle renomination", "a=ice-options:trickle")
+
+//        lines = lines.replace("a=rtpmap:100 H264/90000", "a=rtpmap:102 H264/90000")
+//        lines = lines.replace("a=rtcp-fb:100 goog-remb", "a=rtcp-fb:102 goog-remb")
+//        lines = lines.replace("a=rtcp-fb:100 transport-cc", "a=rtcp-fb:102 transport-cc")
+//        lines = lines.replace("a=rtcp-fb:100 ccm fir", "a=rtcp-fb:102 ccm fir")
+//        lines = lines.replace("a=rtcp-fb:100 nack", "a=rtcp-fb:102 nack")
+//        lines = lines.replace("a=rtcp-fb:100 nack pli", "a=rtcp-fb:102 nack pli")
+//        lines = lines.replace("a=fmtp:100 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f", "a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f")
+
+//        val sdpJson = "\"{\\\"sdp\\\":\\\"${desc.replace("\r\n", "\\\\r\\\\n")}\\\",\\\"type\\\":\\\"${description?.type?.canonicalForm()}\\\"}\""
+
+        Log.d( TAG, "Before $lines")
+        val sdpJson = desc.replace("\\r", "")
+//        Log.d( TAG, "After $sdpJson")
+
+        val modifiedSdp = SessionDescription(SessionDescription.Type.OFFER, lines.replace("\r\n\r\n", "\r\n"))
+
+        val message = JSONObject()
+        message.put("sdp", modifiedSdp.description)
+        message.put("type", modifiedSdp.type.canonicalForm())
+        sendSocketMessage(message.toString())
+
+        Log.d( TAG, "Trying to set local description with $modifiedSdp")
+        pc?.setLocalDescription(object :SdpObserver {
+            override fun onCreateSuccess(p0: SessionDescription?) {
+                Log.d( TAG, "local offer description created $p0")
+            }
+
+            override fun onSetSuccess() {
+                Log.d( TAG, "local offer description set")
+
+            }
+
+            override fun onCreateFailure(p0: String?) {
+                Log.d( TAG, "local offer create failure $p0")
+            }
+
+            override fun onSetFailure(p0: String?) {
+                Log.d( TAG, "local offer set failure $p0")
+            }
+
+        }, modifiedSdp)
+    }
+
+    private fun setCodec(sdp:String, type: String, codec: String, clockRate:String): String {
+        val sdpLines = sdp.split("\n").toMutableList()
+
+
+        var mLineIndex = -1
+        for(i in 0..<sdpLines.size) {
             if (sdpLines[i].contains("m=$type")) {
                 mLineIndex = i
-                break
             }
         }
 
-        if (mLineIndex == null) return sdp
-
         var codecPayload: String? = null
-        val regex = Regex(":(\\d+) $codec/$clockRate")
+        val re = Regex(":(\\d+) $codec/$clockRate")
 
-        // Find codec payload
         for (i in mLineIndex until sdpLines.size) {
             if (sdpLines[i].contains("$codec/$clockRate")) {
-                codecPayload = extractPayloadType(sdpLines[i], regex)
+                codecPayload = extractPayloadType(sdpLines[i], re)
                 if (codecPayload != null && ensureSupportedProfile(codec, sdpLines, mLineIndex, codecPayload)) {
                     sdpLines[mLineIndex] = setDefaultCodec(sdpLines[mLineIndex], codecPayload)
                     break
-                } else {
-                    Log.d("WebRtcPlayer", "$codecPayload, ${codecPayload?.let { {ensureSupportedProfile(codec, sdpLines, mLineIndex, it)} }}")
                 }
             }
         }
@@ -228,80 +459,57 @@ class WebRTCPlayer(
             }
         }
 
-        val resSdp = resSDPLines.joinToString("\r\n")
-        Log.d("modified sdp from setcodec: ", resSdp)
-        return resSdp
+        val retSdp = resSDPLines.joinToString("\r\n")
+        return retSdp
+
     }
 
-    private fun createAndSendOffer() {
-        Log.d("WebRTCPlayer", "creating and sending offer")
-        val constraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
+    private fun extractPayloadType(sdpLine: String, pattern: Regex): String? {
+        val result = pattern.find(sdpLine)
+        return if (result != null && result.groupValues.size == 2) result.groupValues[1] else null
+    }
+
+    private fun ensureSupportedProfile(codec: String, sdpLines: List<String>, mLineIndex: Int, codecPayload: String): Boolean {
+        if (codec != "H264") return true
+
+        // Server can send any profile/level H264, but SDP has to specify the supported one
+        for (i in mLineIndex until sdpLines.size) {
+            if (sdpLines[i].startsWith("a=fmtp:$codecPayload") && sdpLines[i].contains("profile-level-id=42")) {
+                return true
+            }
         }
 
-        peerConnection?.createOffer(object : SdpObserver {
-            override fun onCreateSuccess(sdp: SessionDescription) {
-                var finalSdp = sdp.description
-
-                // Replace H264 profile if needed
-                if (videoCodec == "H264") {
-                    finalSdp = setCodec(sdp.description, "video", videoCodec, 90000)
-                }
-
-                val modifiedSdp = SessionDescription(sdp.type, finalSdp)
-                peerConnection?.setLocalDescription(this, modifiedSdp)
-
-
-//                val sdpJson = "\"{\\\"sdp\\\":\\\"${finalSdp.replace("\r\n", "\\\\r\\\\n")}\\\",\\\"type\\\":\\\"${sdp.type.canonicalForm()}\\\"}\""
-
-                val sdpJson = JSONObject().apply {
-                    put("sdp", modifiedSdp.description)
-                    put("type", modifiedSdp.type.canonicalForm())
-                }
-
-                Log.d("WebRTC", "Sending SDP: $sdpJson")
-                webSocket?.send(sdpJson.toString())
-            }
-
-            override fun onSetSuccess() {
-                Log.d("WebRTC", "Offer desc Set success")
-            }
-            override fun onCreateFailure(error: String) {
-                Log.e("WebRTC", "Offer desc create failure $error")
-            }
-            override fun onSetFailure(error: String) {
-                Log.e("WebRTC", "Offer desc Set failure $error")
-            }
-        }, constraints)
+        return false
     }
 
-    private fun handleServerResponse(serverSdp: JSONObject, serverCandidate: JSONObject) {
-        val remoteSdp = SessionDescription(
-            SessionDescription.Type.ANSWER,
-            serverSdp.getString("sdp")
-        )
+    private fun setDefaultCodec(mLine: String, payload: String): String {
+        val elements = mLine.split(" ")
+        val newLine = mutableListOf<String>()
+        var index = 0
 
-        peerConnection?.setRemoteDescription(object : SdpObserver {
-            override fun onSetSuccess() {
-                val candidate = IceCandidate(
-                    serverCandidate.getString("sdpMid"),
-                    serverCandidate.getInt("sdpMLineIndex"),
-                    serverCandidate.getString("candidate")
-                )
-                peerConnection?.addIceCandidate(candidate)
+        for (element in elements) {
+            if (index == 3) {
+                newLine.add(payload)
+                break
             }
-            override fun onSetFailure(error: String) {}
-            override fun onCreateSuccess(p0: SessionDescription?) {}
-            override fun onCreateFailure(error: String) {}
-        }, remoteSdp)
+            if (element != payload) newLine.add(element)
+            index++
+        }
+
+        return newLine.joinToString(" ")
     }
 
-    fun stop() {
-        peerConnection?.dispose()
-        peerConnection = null
-        webSocket?.close(1000, null)
-        webSocket = null
-        surfaceView.release()
+    fun sendIceCandidates() {
+        Log.d( TAG, "Sending ICE candidates")
+        iceCandidates.forEach { candidate ->
+            val candidateObj = JSONObject().apply {
+                put("type", "candidate")
+                put("sdpMid", candidate.sdpMid)
+                put("sdpMLineIndex", candidate.sdpMLineIndex)
+                put("candidate", candidate.sdp)
+            }
+            sendSocketMessage(candidateObj.toString())
+        }
     }
+
 }

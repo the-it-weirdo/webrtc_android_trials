@@ -28,6 +28,7 @@ androidx-constraintlayout = { group = "androidx.constraintlayout", name = "const
 androidx-activity = { group = "androidx.activity", name = "activity", version.ref = "activity" }
 okhttp3-okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttpVersion" }
 stream-webrtc-android = { module = "io.getstream:stream-webrtc-android", version.ref = "streamWebrtcAndroid" }
+stream-webrtc-android-ktx = { module = "io.getstream:stream-webrtc-android-ktx", version.ref = "streamWebrtcAndroid" }
 androidx-navigation-fragment-ktx = { group = "androidx.navigation", name = "navigation-fragment-ktx", version.ref = "navigationFragmentKtx" }
 androidx-navigation-ui-ktx = { group = "androidx.navigation", name = "navigation-ui-ktx", version.ref = "navigationUiKtx" }
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
