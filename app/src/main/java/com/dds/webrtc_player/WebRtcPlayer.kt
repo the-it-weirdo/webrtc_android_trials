@@ -166,9 +166,6 @@ class WebRTCPlayer(val context: Context, val url:String, val videoSink: VideoSin
                 serverEndPoint.put("candidate", ensureValidCandidate(serverEndPoint.getString("candidate")))
 
                 Log.d( TAG, "Validated candidate: $serverEndPoint")
-                val candidate = IceCandidate(serverEndPoint.getString("sdpMid"), serverEndPoint.getInt("sdpMLineIndex"), serverEndPoint.getString("candidate"))
-                Log.d( TAG, "ICE candidate: $candidate")
-                pc?.addIceCandidate(candidate)
                 val remoteDescription = SessionDescription(SessionDescription.Type.valueOf(serverSDP.getString("type").toUpperCase()), serverSDP.getString("sdp"))
                 Log.d( TAG, "Remote description: $remoteDescription")
                 pc?.setRemoteDescription(object :SdpObserver {
@@ -178,6 +175,9 @@ class WebRTCPlayer(val context: Context, val url:String, val videoSink: VideoSin
 
                     override fun onSetSuccess() {
                         Log.d( TAG, "remote sdp set success")
+                        val candidate = IceCandidate(serverEndPoint.getString("sdpMid"), serverEndPoint.getInt("sdpMLineIndex"), serverEndPoint.getString("candidate"))
+                        Log.d( TAG, "ICE candidate: $candidate")
+                        pc?.addIceCandidate(candidate)
                     }
 
                     override fun onCreateFailure(p0: String?) {
@@ -225,7 +225,8 @@ class WebRTCPlayer(val context: Context, val url:String, val videoSink: VideoSin
 
             override fun onIceCandidate(p0: IceCandidate?) {
                 Log.d( TAG, "onIceCandidate: $p0 , ${p0?.serverUrl}")
-                p0?.let {iceCandidates.add(IceCandidate(it.sdpMid, it.sdpMLineIndex, ensureValidCandidate(it.sdp)))}
+                p0?.let { iceCandidates.add(it) }
+//                p0?.let {iceCandidates.add(IceCandidate(it.sdpMid, it.sdpMLineIndex, ensureValidCandidate(it.sdp)))}
 //                p0?.let { candidate ->
 //                    val candidateObj = JSONObject().apply {
 //                        put("type", "candidate")
@@ -273,6 +274,16 @@ class WebRTCPlayer(val context: Context, val url:String, val videoSink: VideoSin
 
             override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {
                 Log.d( TAG, "onAddTrack: $p0 , $p1")
+                p1?.firstOrNull()?.videoTracks?.firstOrNull()?.addSink(videoSink)
+            }
+
+            override fun onConnectionChange(newState: PeerConnection.PeerConnectionState?) {
+                Log.d(TAG, " new Peer connection state $newState")
+            }
+
+            override fun onIceCandidateError(event: IceCandidateErrorEvent?) {
+                super.onIceCandidateError(event)
+                Log.d(TAG, "Ice candidate error ${event?.url} ${event?.errorText}")
             }
 
         }
